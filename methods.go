@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pengtang1024/kore-plugin-integrity/internal/integrity"
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
@@ -38,50 +39,26 @@ func dispatch(request *pluginapi.Request, cfg config, logger *slog.Logger) (*plu
 		response.Error = notFound(request.Method)
 		return response, false
 	}
-	if perr := handleIntegrityVerb(verb, request.Params, response); perr != nil {
+	service := integrity.NewService(cfg.stateDir, cfg.allowRoots, integrity.DefaultLimits())
+	result, perr := service.Call(verb, request.Params)
+	if perr != nil {
 		response.Error = perr
 		response.Result = nil
+		return response, false
 	}
+	response.Result = encode(result)
 	return response, false
-}
-
-// handleIntegrityVerb 执行完整性方法：baseline 建哈希基线、verify 比对并产生告警。
-// 两者都只做路径白名单校验与 sha256 占位摘要，不读取宿主文件系统。
-func handleIntegrityVerb(verb string, params json.RawMessage, response *pluginapi.Response) *pluginapi.Error {
-	switch verb {
-	case "baseline":
-		p, perr := parseBaselineParams(params)
-		if perr != nil {
-			return perr
-		}
-		response.Result = encode(runBaseline(p))
-		return nil
-	case "verify":
-		p, perr := parseVerifyParams(params)
-		if perr != nil {
-			return perr
-		}
-		response.Result = encode(runVerify(p))
-		return nil
-	default:
-		return notFound(verb)
-	}
 }
 
 // businessVerb 把 <id>.<verb> 或裸 <verb> 归一为动词名。
 func businessVerb(method, id string) (string, bool) {
 	verb := strings.TrimPrefix(method, id+".")
 	switch verb {
-	case "baseline", "verify":
+	case "baseline", "check", "status", "verify_file":
 		return verb, true
 	default:
 		return "", false
 	}
-}
-
-// invalidParam 构造 E_INVALID 错误体（§9）。
-func invalidParam(msg string) *pluginapi.Error {
-	return &pluginapi.Error{Code: pluginapi.E_INVALID, Message: msg}
 }
 
 // notFound 构造 E_NOTFOUND 错误体（§9）。

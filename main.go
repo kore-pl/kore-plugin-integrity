@@ -1,7 +1,9 @@
-// Package main 是 kore 的 integrity 插件：关键文件哈希基线 + 变更告警。
+// Package main 是 kore 的 integrity 插件：关键文件完整性基线、变更比对与单文件校验。
 //
-// 本仓为 M5 批 1 基础级骨架：只做路径白名单校验与 sha256 占位摘要，
-// 不读取宿主文件系统、不写任何宿主文件（骨架口径）。
+// 业务能力由 internal/integrity 提供：baseline（快照落 <state>/baseline.json）、
+// check（added/removed/modified 三态）、status（基线元信息）、verify_file（单文件 sha256）。
+// 只计算 sha256，不返回、不记录文件内容；路径白名单 + symlink 二次归属 + 递归/大小上限
+// 全部收在 internal/integrity，主包只做协议分发。
 //
 // 协议面（kore.plugin.v1）：连接内核注入的 UDS → kore.hello 握手 → 会话循环
 // 读 request、按 method 分发并回 response；stdout 留给协议，日志一律写 stderr。

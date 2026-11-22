@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/pengtang1024/kore-plugin-integrity/internal/integrity"
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
@@ -44,6 +47,10 @@ type config struct {
 	requiresKore string
 	// capabilities 能力声明，取内嵌清单。
 	capabilities []string
+	// stateDir 是插件状态目录（KORE_STATE_DIR），基线落盘为 <state>/baseline.json。
+	stateDir string
+	// allowRoots 是 KORE_INTEGRITY_ALLOW_ROOTS 追加的白名单根（已校验为规范绝对路径）。
+	allowRoots []string
 	// startedAt 进程启动时刻，用于 kore.ping 的 uptime_s。
 	startedAt time.Time
 }
@@ -64,8 +71,17 @@ func loadConfig() (config, error) {
 		version:      m.Version,
 		requiresKore: m.RequiresKore,
 		capabilities: m.Capabilities,
+		stateDir:     strings.TrimSpace(os.Getenv("KORE_STATE_DIR")),
 		startedAt:    time.Now(),
 	}
+	if cfg.stateDir != "" && !filepath.IsAbs(cfg.stateDir) {
+		return config{}, fmt.Errorf("KORE_STATE_DIR 必须是绝对路径: %s", cfg.stateDir)
+	}
+	extraRoots, err := integrity.ParseAllowRoots(os.Getenv("KORE_INTEGRITY_ALLOW_ROOTS"))
+	if err != nil {
+		return config{}, err
+	}
+	cfg.allowRoots = extraRoots
 	if cfg.id == "" {
 		cfg.id = m.ID
 	}

@@ -9,16 +9,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pengtang1024/kore-plugin-integrity/internal/integrity"
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 // testConfig 构造握手与会话循环共用的一致配置（不依赖环境变量）。
 func testConfig() config {
+	extraRoots, _ := integrity.ParseAllowRoots(os.Getenv("KORE_INTEGRITY_ALLOW_ROOTS"))
 	return config{
 		id:           "integrity",
 		version:      "0.1.0",
 		requiresKore: ">=0.1.0 <0.2.0",
 		capabilities: []string{"system:read"},
+		stateDir:     os.Getenv("KORE_STATE_DIR"),
+		allowRoots:   extraRoots,
 		startedAt:    time.Now(),
 	}
 }
