@@ -113,7 +113,7 @@ kore 的**关键文件完整性插件**：对关键文件建立 sha256 基线，
 
 ```bash
 make build   # CGO_ENABLED=0 GOWORK=off GOAMD64=v1 go build -trimpath -buildvcs=false -ldflags="-s -w" -o bin/integrity .
-make dist    # 产出 dist/integrity-0.3.0.tar.gz（info.json + bin/integrity + SHA256SUMS）与同名 .sha256
+make dist    # 产出 dist/integrity-0.5.1.tar.gz（info.json + bin/integrity + SHA256SUMS）与同名 .sha256
 make check   # gofmt → go vet → go test -timeout 200s
 ```
 
@@ -157,7 +157,7 @@ GOWORK=off go test -v -run TestIntegrityE2E ./tests/e2e
 - **行为准则**：[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。
 - **兼容性**：`protocol: kore.plugin.v1` · `requires_kore: >=0.1.0 <0.2.0` · `lifecycle: lazy` · 深度等级 `basic`。
 - **验证方式**：本地 `make check` 优先（CI 只在 push main / tag / PR / 手动跑；发布前 `make dist` 连跑两次核对 sha 一致）。
-- **发布产物**：`make dist` → `dist/integrity-0.3.2.tar.gz` + `.sha256`（位级可复现，连跑两次 sha 相同）。
+- **发布产物**：`make dist` → `dist/integrity-0.5.1.tar.gz` + `.sha256`（位级可复现，连跑两次 sha 相同）。
 - **相关仓库**：[索引 kore-plugins](https://github.com/kore-pl/kore-plugins) · [协议文档](https://github.com/kore-pl/kore/blob/main/docs/PLUGIN-PROTOCOL.md) · [SDK 指南](https://github.com/kore-pl/kore/blob/main/docs/PLUGIN-SDK.md)
 
 <!-- oss:end -->
