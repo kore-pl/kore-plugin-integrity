@@ -74,6 +74,24 @@ type BaselineListItem struct {
 	Current     bool   `json:"current"`
 }
 
+// restoreParams 是 integrity.restore 的入参。
+type restoreParams struct {
+	BaselineID string `json:"baseline_id"`
+}
+
+// RestoreResult 是 integrity.restore 的结果。
+//
+//	FromID 是覆盖前的当前基线（没有当前基线时为空），ToID 是恢复到的历史快照；
+//	BackupPath 是覆盖前当前基线的同目录备份（0600），便于事后回看/再次回滚。
+type RestoreResult struct {
+	FromID     string `json:"from_id"`
+	ToID       string `json:"to_id"`
+	Entries    int    `json:"entries"`
+	Restored   bool   `json:"restored"`
+	BackupPath string `json:"backup_path,omitempty"`
+	Hint       string `json:"hint"`
+}
+
 // BaselineListResult 是 integrity.baseline.list 的结果。
 type BaselineListResult struct {
 	Baselines []BaselineListItem `json:"baselines"`
@@ -171,6 +189,8 @@ func (s *Service) Call(method string, params json.RawMessage) (any, *pluginapi.E
 		return s.baseline(params)
 	case "baseline.list":
 		return s.baselineList(params)
+	case "restore":
+		return s.restore(params)
 	case "check":
 		return s.check(params)
 	case "status":
@@ -184,6 +204,80 @@ func (s *Service) Call(method string, params json.RawMessage) (any, *pluginapi.E
 	default:
 		return nil, &pluginapi.Error{Code: pluginapi.E_NOTFOUND, Message: "未知方法：" + method}
 	}
+}
+
+// restore 把指定历史快照恢复为当前基线：覆盖前先备份并归档当前基线，幂等。
+func (s *Service) restore(raw json.RawMessage) (any, *pluginapi.Error) {
+	var p restoreParams
+	if perr := decodeParams(raw, &p); perr != nil {
+		return nil, perr
+	}
+	id := strings.TrimSpace(p.BaselineID)
+	if id == "" {
+		return nil, invalid("缺少必填字段 baseline_id")
+	}
+	if err := validateSnapshotID(id); err != nil {
+		return nil, invalid("baseline_id 非法: " + err.Error())
+	}
+	if perr := s.requireState(); perr != nil {
+		return nil, perr
+	}
+	target, err := s.store.LoadSnapshot(id)
+	if err != nil {
+		if errors.Is(err, ErrNoSnapshot) {
+			return nil, notFoundErr("未找到基线快照 "+id, s.snapshotHint())
+		}
+		return nil, internalErr(err.Error())
+	}
+	current, err := s.store.Load()
+	if err != nil && !errors.Is(err, ErrNoBaseline) {
+		return nil, internalErr(err.Error())
+	}
+	result := RestoreResult{ToID: target.ID, Entries: len(target.Entries)}
+	if err == nil {
+		result.FromID = current.ID
+		// 幂等：已经是目标版本时不备份、不写盘。
+		if current.ID == target.ID {
+			result.Restored = false
+			result.Hint = "当前基线已是该快照，无需恢复"
+			return result, nil
+		}
+		backupPath, backupErr := s.store.BackupCurrent(s.now())
+		if backupErr != nil {
+			return nil, internalErr("备份当前基线失败: " + backupErr.Error())
+		}
+		result.BackupPath = backupPath
+		// 把被替换的当前基线也归档进历史：恢复后仍可再回滚到它。
+		if _, archiveErr := s.store.Archive(current); archiveErr != nil {
+			return nil, internalErr("归档当前基线失败: " + archiveErr.Error())
+		}
+	}
+	if err := s.store.Save(target); err != nil {
+		return nil, internalErr("恢复基线失败: " + err.Error())
+	}
+	result.Restored = true
+	result.Hint = "已恢复为历史快照；原当前基线已备份到 backup_path 并归档进历史"
+	return result, nil
+}
+
+// snapshotHint 汇总可用快照 id（最多 10 个），用于 E_NOTFOUND 的可操作提示。
+func (s *Service) snapshotHint() string {
+	metas, err := s.store.ListSnapshots()
+	if err != nil || len(metas) == 0 {
+		return "用 integrity.baseline.list 查看可用快照"
+	}
+	ids := make([]string, 0, 10)
+	for _, meta := range metas {
+		if len(ids) >= 10 {
+			break
+		}
+		ids = append(ids, meta.ID)
+	}
+	hint := "可用快照: " + strings.Join(ids, ", ")
+	if len(metas) > len(ids) {
+		hint += " …"
+	}
+	return hint
 }
 
 // baseline 建立新的基线快照：旧当前基线进入历史，再按 keep 裁剪历史。

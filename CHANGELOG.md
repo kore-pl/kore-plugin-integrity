@@ -2,6 +2,17 @@
 
 本仓库遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。
 
+## [0.3.3] - 2026-11-23
+
+### 新增
+
+- **`integrity.restore`（`system:admin`）**：把 `baselines/<id>` 历史快照恢复为当前
+  `baseline.json`，返回 `{from_id, to_id, entries, restored, backup_path?, hint}`；
+  覆盖前把当前基线复制为 `<state>/baseline.bak.<UTC 纳秒>.json`（0600）并归档进历史，
+  恢复后仍可再回滚；已是目标版本时 `restored=false` 且不写盘、不产生备份；
+  不存在 id 返回 `E_NOTFOUND` + 可用 id 列表 hint；写入仍限定插件 state（零侵入 G-31）。
+- `info.json.method_capabilities` 增加 `integrity.restore: system:admin`。
+
 ## [0.3.2] - 2026-11-23
 
 ### Changed

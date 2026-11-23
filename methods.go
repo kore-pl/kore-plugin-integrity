@@ -54,7 +54,7 @@ func dispatch(request *pluginapi.Request, cfg config, logger *slog.Logger) (*plu
 func businessVerb(method, id string) (string, bool) {
 	verb := strings.TrimPrefix(method, id+".")
 	switch verb {
-	case "baseline", "baseline.list", "check", "status", "verify_file",
+	case "baseline", "baseline.list", "restore", "check", "status", "verify_file",
 		"schedule.set", "schedule.get":
 		return verb, true
 	default:

@@ -2,7 +2,7 @@
 
 kore 的**关键文件完整性插件**：对关键文件建立 sha256 基线，按需比对篡改/新增/删除。
 `info.json.depth_level = "basic"`、`lifecycle = "lazy"`；方法级能力：读方法 `system:read`、
-`baseline` / `schedule.set` 为 `system:admin`；插件级声明 `system:read` + `system:admin`
+`baseline` / `restore` / `schedule.set` 为 `system:admin`；插件级声明 `system:read` + `system:admin`
 （方法级只收窄、不放大，用户在商店启用时确认的能力覆盖全部方法）。`verify_file` 因内核
 方法名语法不含下划线无法进表，回退到插件级声明。
 
@@ -19,6 +19,7 @@ kore 的**关键文件完整性插件**：对关键文件建立 sha256 基线，
 | --- | --- | --- |
 | `integrity.baseline` / `baseline` | `{paths[], exclude?[], note?, keep?}` | 递归扫描并生成新基线快照（旧快照进入历史）。`keep` 为保留快照总数（含当前，1..100，缺省 10）。返回 `{saved, id, note?, entries, total_bytes, duration_ms, previous_entries, archived_id?, kept, baseline_count, warnings?}` |
 | `integrity.baseline.list` / `baseline.list` | `{limit?}` | 列出当前与历史基线快照（不含 entries）：`{baselines[], count, keep}`；每条含 `id/created_at/note?/entries/total_bytes/last_check_at?/last_check_ok?/current` |
+| `integrity.restore` / `restore` | `{baseline_id}` | 把历史快照恢复为当前基线：覆盖前把当前基线备份为 `<state>/baseline.bak.<ts>.json` 并归档进历史；返回 `{from_id, to_id, entries, restored, backup_path?, hint}`（已是该版本时 `restored=false`，不写盘） |
 | `integrity.check` / `check` | `{paths?, exclude?, baseline_id?}` | 与指定基线比对（`baseline_id` 空/`latest` = 当前）。返回 `{ok, baseline_id, added[], removed[], modified[], unchanged, checked_at, truncated, summary, alerts[], recovery, warnings?}` |
 | `integrity.status` / `status` | 无 | 当前基线 + 历史数量：`{has_baseline, created_at, entries, total_bytes, last_check_at, last_check_ok, baseline_count, latest_id, latest_note?}`；从未建立的字段为 `null` |
 | `integrity.verify_file` / `verify_file` | `{path, expected_sha256}` | 单文件校验：`{match, actual_sha256, expected_sha256}` |

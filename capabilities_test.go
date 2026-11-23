@@ -78,6 +78,7 @@ func TestMethodCapabilitiesDeclared(t *testing.T) {
 	want := map[string]string{
 		"integrity.baseline":      "system:admin",
 		"integrity.baseline.list": "system:read",
+		"integrity.restore":       "system:admin",
 		"integrity.check":         "system:read",
 		"integrity.status":        "system:read",
 		"integrity.schedule.set":  "system:admin",

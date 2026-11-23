@@ -140,6 +140,30 @@ func (s *Store) Save(baseline *Baseline) error {
 	return writeJSONAtomic(s.Path(), baseline)
 }
 
+// BackupCurrent 把当前基线复制到 <state>/baseline.bak.<UTC 纳秒>.json（0600 原子写），
+// 供 integrity.restore 覆盖当前基线前留证；文件名冲突时追加序号。
+func (s *Store) BackupCurrent(now time.Time) (string, error) {
+	if s.dir == "" {
+		return "", errors.New("KORE_STATE_DIR 未设置")
+	}
+	current, err := s.Load()
+	if err != nil {
+		return "", err
+	}
+	base := filepath.Join(s.dir, "baseline.bak."+now.UTC().Format("20060102T150405.000000000Z"))
+	target := base + ".json"
+	for suffix := 2; ; suffix++ {
+		if _, statErr := os.Stat(target); errors.Is(statErr, os.ErrNotExist) {
+			break
+		}
+		target = fmt.Sprintf("%s-%d.json", base, suffix)
+	}
+	if err := writeJSONAtomic(target, current); err != nil {
+		return "", err
+	}
+	return target, nil
+}
+
 // LoadSnapshot 按 id 读取快照：id 命中当前基线或历史文件都可以。
 func (s *Store) LoadSnapshot(id string) (*Baseline, error) {
 	if s.dir == "" {
