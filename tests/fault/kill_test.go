@@ -1,9 +1,16 @@
-// Package fault_test 对 integrity 做四类故障注入，验证异常路径的结构化行为：
+// Package fault_test 对 integrity 做故障注入，验证异常路径的结构化行为：
 //
 //  1. kill：内核侧强制断开（含半包帧），插件侧必须立刻返回错误而不是 hang；
 //  2. timeout：hello 预算内对端不回响应 + deadline 清除后的恢复闭环；
 //  3. disk full：状态目录不可写时基线保存失败，回 E_INTERNAL 而不是谎报 saved；
-//  4. permission / oversize：不可读文件与超大文件跳过并记 warning，不失败整个调用。
+//  4. permission / oversize：不可读文件与超大文件跳过并记 warning，不失败整个调用；
+//     同族权限故障在 verify_file 上必须显式报错，不能回 match=false；
+//  5. restore：恢复失败（状态目录不可写）回 E_INTERNAL 且原基线逐字节不变、不留半成品；
+//  6. schedule.get / schedule.set：schedule.json 损坏必须报错（不得静默返回空计划 /
+//     不得覆盖损坏文件），状态目录不可写时不得谎报 saved；
+//  7. baseline.list：历史索引或当前基线损坏必须报错，不得静默丢历史 / 丢当前；
+//  8. 声明漂移：method_capabilities 必须过内核 methodActionPattern（否则整份清单
+//     fail-closed），verify_file 因下划线按设计回退插件级能力。
 package fault_test
 
 import (

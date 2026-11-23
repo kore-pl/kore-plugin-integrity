@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/pengtang1024/kore-plugin-integrity/internal/integrity"
+	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
 // baselineOK 执行一次基线并返回结果。
@@ -60,6 +61,21 @@ func TestPermissionFault(t *testing.T) {
 	}
 	if !hasWarning(result.Warnings, "不可读") {
 		t.Fatalf("warnings=%v，期望包含不可读", result.Warnings)
+	}
+
+	// 同族权限故障扩展到 verify_file：可读文件正常校验，
+	// 不可读文件必须**显式报错**——回 match=false 会让用户以为"内容被篡改"。
+	verified := callOK[integrity.VerifyFileResult](t, service, "verify_file", verifyFileRequest{
+		Path: good, ExpectedSHA256: sha256Hex("good"),
+	})
+	if !verified.Match {
+		t.Fatalf("可读文件校验 result=%+v，期望 match=true", verified)
+	}
+	perr := callFault(t, service, "verify_file", verifyFileRequest{
+		Path: bad, ExpectedSHA256: sha256Hex("bad"),
+	})
+	if perr.Code != pluginapi.E_INVALID {
+		t.Fatalf("不可读文件 code=%s，期望 E_INVALID（权限故障必须显式报错）", perr.Code)
 	}
 }
 
