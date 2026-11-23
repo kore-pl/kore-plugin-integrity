@@ -2,6 +2,52 @@
 
 本仓库遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。
 
+## [0.3.0] - 2026-11-23
+
+### 新增
+
+- **方法级 capability（§3.5 #12）**：`info.json.method_capabilities` 声明
+  `baseline` / `schedule.set` 为 `system:admin`，`baseline.list` / `check` / `status` /
+  `schedule.get` 为 `system:read`；插件级 `capabilities` 保持 `system:read`。
+  `verify_file` 因内核 `methodActionPattern` 不允许下划线而无法进表，有效能力回退到
+  插件级 `system:read`（`capabilities_test.go` 锁定该事实）。
+- **基线多版本**：`baseline` 支持 `note`（≤200 字符）与 `keep`（1..100，缺省 10），
+  每次生成 `baseline-<UTC 纳秒>` 快照；旧当前基线先归档到 `<state>/baselines/<id>.json`
+  再替换，历史元信息存 `<state>/baselines/index.json`（不含 entries，避免一次加载全部历史）。
+  0.2.0 的单文件基线（`version=1`）仍可读，`id` 按 `created_at` 派生，再建基线时自动归档。
+- **指定基线比对**：`check` 新增 `baseline_id`（空/`latest` = 当前），可对历史快照比对；
+  `check` 回写所选快照的 `last_check_at` / `last_check_ok`。
+- **`integrity.baseline.list`**：列出当前与历史快照元信息（`limit` 1..100），
+  返回 `{baselines[], count, keep}`。
+- **告警聚合**：`check` 新增 `summary{added,removed,modified,unchanged,skipped}` 与
+  `alerts[]`（`file_removed`/`file_modified`=critical，`file_added`/`scan_incomplete`=warning，
+  每条含 `code/severity/metric/count/message/hint`）；**不发通知**（G-10 不出网）。
+- **恢复边界显式化**：`check` 新增 `recovery{supported:false, owner:"backup",
+  method:"backup.restore", hint}`——本仓只做检测，不保存文件内容，回滚由 `backup` 插件负责。
+- **定时扫描（交给内核 scheduler）**：`integrity.schedule.set` 输出内核 scheduler 可消费的
+  任务描述（对齐 `backup.schedule.set`：`created=false`、`task_id=""`、`next_run_at`、
+  `recommended_task{name,plugin,method,params,schedule,timeout_s}`），默认 `0 4 * * *`、
+  `timeout_s` 1800；`integrity.schedule.get` 读回本地描述。**插件内零 ticker / 零 AfterFunc /
+  零定时 goroutine**（G-19），`g19_test.go` 对源码做静态门禁。
+- `status` 新增 `baseline_count` / `latest_id` / `latest_note`。
+
+### 变更
+
+- 当前基线仍是 `<state>/baseline.json`（0600 原子写）；历史快照与索引同为 0600，
+  索引损坏时 `baseline.list` / 新 `baseline` 显式 `E_INTERNAL`，不静默丢历史。
+- 版本 `0.2.0` → `0.3.0`（新增方法，minor）；`manifest.json` 同步版本。
+
+### 测试
+
+- 方法级 capability 表驱动：语法（内核 methodActionPattern）、取值、覆盖与预期一致、
+  `verify_file` 兜底；零 ticker 静态门禁。
+- 基线多版本：归档/列表/指定旧基线比对/保留裁剪/说明与 keep 边界/旧格式兼容/
+  索引损坏 fail-closed/0600 权限。
+- 告警：四类告警表驱动（code/severity/metric/count/顺序）、三态同时出现与无差异空数组、
+  恢复指引 `supported=false`。
+- 定时扫描：任务描述契约、绑定历史基线、无基线/非法 cron/超时/路径/未知快照拒绝、
+  损坏描述 fail-closed、cron 下次执行时间。
+
 ## [0.2.0] - 2026-11-23
 
 ### 新增

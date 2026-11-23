@@ -15,16 +15,25 @@ import (
 // MaxPaths 是单次 baseline/check 的路径条数上限。
 const MaxPaths = 256
 
+// MaxNoteLen 是基线说明的长度上限。
+const MaxNoteLen = 200
+
 // baselineParams 是 integrity.baseline 入参。
 type baselineParams struct {
 	Paths   []string `json:"paths"`
 	Exclude []string `json:"exclude,omitempty"`
+	// Note 是快照说明（≤200 字符，便于在历史列表里区分版本）。
+	Note string `json:"note,omitempty"`
+	// Keep 是保留的快照总数（含当前），1..100，缺省 DefaultBaselineKeep。
+	Keep int `json:"keep,omitempty"`
 }
 
 // checkParams 是 integrity.check 入参：paths 可省略，省略时沿用基线记录的扫描根。
 type checkParams struct {
 	Paths   []string `json:"paths,omitempty"`
 	Exclude []string `json:"exclude,omitempty"`
+	// BaselineID 指定与哪个基线快照比对；空或 "latest" 表示当前最新。
+	BaselineID string `json:"baseline_id,omitempty"`
 }
 
 // verifyFileParams 是 integrity.verify_file 入参。
@@ -33,14 +42,43 @@ type verifyFileParams struct {
 	ExpectedSHA256 string `json:"expected_sha256"`
 }
 
+// baselineListParams 是 integrity.baseline.list 入参。
+type baselineListParams struct {
+	Limit int `json:"limit,omitempty"`
+}
+
 // BaselineResult 是 integrity.baseline 的结果。
 type BaselineResult struct {
 	Saved           bool     `json:"saved"`
+	ID              string   `json:"id"`
+	Note            string   `json:"note,omitempty"`
 	Entries         int      `json:"entries"`
 	TotalBytes      int64    `json:"total_bytes"`
 	DurationMS      int64    `json:"duration_ms"`
 	PreviousEntries int      `json:"previous_entries"`
+	ArchivedID      string   `json:"archived_id,omitempty"`
+	Kept            int      `json:"kept"`
+	BaselineCount   int      `json:"baseline_count"`
 	Warnings        []string `json:"warnings,omitempty"`
+}
+
+// BaselineListItem 是历史基线列表的一条（不含 entries）。
+type BaselineListItem struct {
+	ID          string `json:"id"`
+	CreatedAt   string `json:"created_at"`
+	Note        string `json:"note,omitempty"`
+	Entries     int    `json:"entries"`
+	TotalBytes  int64  `json:"total_bytes"`
+	LastCheckAt string `json:"last_check_at,omitempty"`
+	LastCheckOK *bool  `json:"last_check_ok,omitempty"`
+	Current     bool   `json:"current"`
+}
+
+// BaselineListResult 是 integrity.baseline.list 的结果。
+type BaselineListResult struct {
+	Baselines []BaselineListItem `json:"baselines"`
+	Count     int                `json:"count"`
+	Keep      int                `json:"keep"`
 }
 
 // ModifiedEntry 是单条被修改文件的结构化差异（只比 sha256 与 mode）。
@@ -53,25 +91,43 @@ type ModifiedEntry struct {
 	Changes   []string `json:"changes"`
 }
 
+// CheckSummary 是本次比对的计数汇总（指标口径固定，便于告警与前端展示）。
+type CheckSummary struct {
+	Added     int `json:"added"`
+	Removed   int `json:"removed"`
+	Modified  int `json:"modified"`
+	Unchanged int `json:"unchanged"`
+	// Skipped 是扫描期被跳过 / 告警的条目数（结论可能不完整）。
+	Skipped int `json:"skipped"`
+}
+
 // CheckResult 是 integrity.check 的结果。
 type CheckResult struct {
-	OK        bool            `json:"ok"`
-	Added     []string        `json:"added"`
-	Removed   []string        `json:"removed"`
-	Modified  []ModifiedEntry `json:"modified"`
-	Unchanged int             `json:"unchanged"`
-	CheckedAt string          `json:"checked_at"`
-	Warnings  []string        `json:"warnings,omitempty"`
+	OK         bool            `json:"ok"`
+	BaselineID string          `json:"baseline_id"`
+	Added      []string        `json:"added"`
+	Removed    []string        `json:"removed"`
+	Modified   []ModifiedEntry `json:"modified"`
+	Unchanged  int             `json:"unchanged"`
+	CheckedAt  string          `json:"checked_at"`
+	Truncated  bool            `json:"truncated"`
+	Summary    CheckSummary    `json:"summary"`
+	Alerts     []CheckAlert    `json:"alerts"`
+	Recovery   RecoveryGuide   `json:"recovery"`
+	Warnings   []string        `json:"warnings,omitempty"`
 }
 
 // StatusResult 是 integrity.status 的结果；从未建立的字段为 null 而不是零值。
 type StatusResult struct {
-	HasBaseline bool    `json:"has_baseline"`
-	CreatedAt   *string `json:"created_at"`
-	Entries     int     `json:"entries"`
-	TotalBytes  int64   `json:"total_bytes"`
-	LastCheckAt *string `json:"last_check_at"`
-	LastCheckOK *bool   `json:"last_check_ok"`
+	HasBaseline   bool    `json:"has_baseline"`
+	CreatedAt     *string `json:"created_at"`
+	Entries       int     `json:"entries"`
+	TotalBytes    int64   `json:"total_bytes"`
+	LastCheckAt   *string `json:"last_check_at"`
+	LastCheckOK   *bool   `json:"last_check_ok"`
+	BaselineCount int     `json:"baseline_count"`
+	LatestID      *string `json:"latest_id"`
+	LatestNote    *string `json:"latest_note,omitempty"`
 }
 
 // VerifyFileResult 是 integrity.verify_file 的结果。
@@ -81,7 +137,7 @@ type VerifyFileResult struct {
 	ExpectedSHA256 string `json:"expected_sha256"`
 }
 
-// Service 是四个业务方法共享的运行期依赖。
+// Service 是业务方法共享的运行期依赖。
 type Service struct {
 	store   *Store
 	allow   *Allowlist
@@ -108,23 +164,29 @@ func (s *Service) SetNow(now func() time.Time) {
 	}
 }
 
-// Call 解析 params 并执行四个业务方法之一。
+// Call 解析 params 并执行业务方法之一。
 func (s *Service) Call(method string, params json.RawMessage) (any, *pluginapi.Error) {
 	switch method {
 	case "baseline":
 		return s.baseline(params)
+	case "baseline.list":
+		return s.baselineList(params)
 	case "check":
 		return s.check(params)
 	case "status":
 		return s.status(params)
 	case "verify_file":
 		return s.verifyFile(params)
+	case "schedule.set":
+		return s.scheduleSet(params)
+	case "schedule.get":
+		return s.scheduleGet(params)
 	default:
 		return nil, &pluginapi.Error{Code: pluginapi.E_NOTFOUND, Message: "未知方法：" + method}
 	}
 }
 
-// baseline 建立（覆盖）基线快照。
+// baseline 建立新的基线快照：旧当前基线进入历史，再按 keep 裁剪历史。
 func (s *Service) baseline(raw json.RawMessage) (any, *pluginapi.Error) {
 	var p baselineParams
 	if perr := decodeParams(raw, &p); perr != nil {
@@ -136,43 +198,119 @@ func (s *Service) baseline(raw json.RawMessage) (any, *pluginapi.Error) {
 	if perr := validatePathCount(p.Paths); perr != nil {
 		return nil, perr
 	}
+	note, perr := normalizeNote(p.Note)
+	if perr != nil {
+		return nil, perr
+	}
+	keep := p.Keep
+	if keep == 0 {
+		keep = DefaultBaselineKeep
+	}
+	if keep < 1 || keep > MaxBaselineKeep {
+		return nil, invalid(fmt.Sprintf("keep 必须在 1–%d 之间", MaxBaselineKeep))
+	}
 	if perr := s.requireState(); perr != nil {
 		return nil, perr
 	}
-	started := s.now()
-	previous := 0
-	if prior, err := s.store.Load(); err == nil {
-		previous = len(prior.Entries)
-	} else if !errors.Is(err, ErrNoBaseline) {
+	previous, err := s.store.Load()
+	if err != nil && !errors.Is(err, ErrNoBaseline) {
 		return nil, internalErr(err.Error())
 	}
+	if errors.Is(err, ErrNoBaseline) {
+		previous = nil
+	}
+	started := s.now()
 	scan, perr := s.scanner.Scan(p.Paths, p.Exclude)
 	if perr != nil {
 		return nil, perr
 	}
-	createdAt := started.UTC().Format(time.RFC3339Nano)
+	now := s.now().UTC()
 	baseline := &Baseline{
+		ID:         newBaselineID(s.store, now),
+		Note:       note,
 		Version:    baselineVersion,
-		CreatedAt:  createdAt,
+		CreatedAt:  now.Format(time.RFC3339Nano),
 		Roots:      append([]string(nil), p.Paths...),
 		Exclude:    append([]string(nil), p.Exclude...),
 		Entries:    scan.Entries,
 		TotalBytes: scan.TotalBytes,
 	}
+	result := BaselineResult{
+		Saved:      true,
+		ID:         baseline.ID,
+		Note:       note,
+		Entries:    len(scan.Entries),
+		TotalBytes: scan.TotalBytes,
+		DurationMS: s.now().Sub(started).Milliseconds(),
+		Kept:       keep,
+		Warnings:   append([]string(nil), scan.Warnings...),
+	}
+	// 先把旧快照写进历史（含索引），再替换当前基线：任一步失败都不会丢上一份基线。
+	if previous != nil {
+		result.PreviousEntries = len(previous.Entries)
+		meta, archiveErr := s.store.Archive(previous)
+		if archiveErr != nil {
+			return nil, internalErr("归档上一份基线失败: " + archiveErr.Error())
+		}
+		result.ArchivedID = meta.ID
+	}
 	if err := s.store.Save(baseline); err != nil {
 		return nil, internalErr("保存基线失败: " + err.Error())
 	}
-	return BaselineResult{
-		Saved:           true,
-		Entries:         len(scan.Entries),
-		TotalBytes:      scan.TotalBytes,
-		DurationMS:      s.now().Sub(started).Milliseconds(),
-		PreviousEntries: previous,
-		Warnings:        scan.Warnings,
-	}, nil
+	if _, pruneErr := s.store.Prune(keep); pruneErr != nil {
+		result.Warnings = append(result.Warnings, "裁剪历史基线失败: "+pruneErr.Error())
+	}
+	// keep=1 时上一份基线刚归档就被裁掉，不要把已被删除的 id 回给调用方。
+	if result.ArchivedID != "" && !s.store.SnapshotExists(result.ArchivedID) {
+		result.ArchivedID = ""
+	}
+	if metas, listErr := s.store.ListSnapshots(); listErr == nil {
+		result.BaselineCount = len(metas)
+	}
+	return result, nil
 }
 
-// check 对比当前状态与基线，产出 added / removed / modified / unchanged。
+// baselineList 列出当前与历史基线快照（不含 entries）。
+func (s *Service) baselineList(raw json.RawMessage) (any, *pluginapi.Error) {
+	var p baselineListParams
+	if perr := decodeParams(raw, &p); perr != nil {
+		return nil, perr
+	}
+	limit := p.Limit
+	if limit == 0 {
+		limit = MaxBaselineKeep
+	}
+	if limit < 1 || limit > MaxBaselineKeep {
+		return nil, invalid(fmt.Sprintf("limit 必须在 1–%d 之间", MaxBaselineKeep))
+	}
+	if perr := s.requireState(); perr != nil {
+		return nil, perr
+	}
+	metas, err := s.store.ListSnapshots()
+	if err != nil {
+		return nil, internalErr(err.Error())
+	}
+	result := BaselineListResult{Baselines: []BaselineListItem{}, Keep: DefaultBaselineKeep}
+	for _, meta := range metas {
+		if len(result.Baselines) >= limit {
+			break
+		}
+		result.Baselines = append(result.Baselines, BaselineListItem{
+			ID:          meta.ID,
+			CreatedAt:   meta.CreatedAt,
+			Note:        meta.Note,
+			Entries:     meta.Entries,
+			TotalBytes:  meta.TotalBytes,
+			LastCheckAt: meta.LastCheckAt,
+			LastCheckOK: meta.LastCheckOK,
+			Current:     meta.Current,
+		})
+	}
+	result.Count = len(result.Baselines)
+	return result, nil
+}
+
+// check 对比当前状态与指定基线（缺省最新），产出三态、汇总、告警与恢复指引。
 func (s *Service) check(raw json.RawMessage) (any, *pluginapi.Error) {
 	var p checkParams
 	if perr := decodeParams(raw, &p); perr != nil {
@@ -184,12 +322,33 @@ func (s *Service) check(raw json.RawMessage) (any, *pluginapi.Error) {
 	if perr := s.requireState(); perr != nil {
 		return nil, perr
 	}
-	baseline, err := s.store.Load()
-	if err != nil {
-		if errors.Is(err, ErrNoBaseline) {
-			return nil, notFoundErr("尚未建立完整性基线", "先调用 integrity.baseline 建立基线")
+	baselineID := strings.TrimSpace(p.BaselineID)
+	if baselineID == "latest" {
+		baselineID = ""
+	}
+	var baseline *Baseline
+	var err error
+	isCurrent := baselineID == ""
+	if isCurrent {
+		baseline, err = s.store.Load()
+	} else {
+		baseline, err = s.store.LoadSnapshot(baselineID)
+		if err == nil {
+			// 显式 id 命中的也可能就是当前基线；只有历史快照才走 SaveArchived。
+			if current, loadErr := s.store.Load(); loadErr == nil && current.ID == baseline.ID {
+				isCurrent = true
+			}
 		}
-		return nil, internalErr(err.Error())
+	}
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrNoBaseline):
+			return nil, notFoundErr("尚未建立完整性基线", "先调用 integrity.baseline 建立基线")
+		case errors.Is(err, ErrNoSnapshot):
+			return nil, notFoundErr("未找到基线快照 "+baselineID, "用 integrity.baseline.list 查看可用快照")
+		default:
+			return nil, internalErr(err.Error())
+		}
 	}
 	paths := p.Paths
 	if len(paths) == 0 {
@@ -207,20 +366,30 @@ func (s *Service) check(raw json.RawMessage) (any, *pluginapi.Error) {
 		return nil, perr
 	}
 	result := compareEntries(baseline.Entries, scan.Entries, s.now().UTC())
+	result.BaselineID = baseline.ID
+	result.Truncated = scan.Truncated
 	result.Warnings = scan.Warnings
-	ok := len(result.Added) == 0 && len(result.Removed) == 0 && len(result.Modified) == 0
-	result.OK = ok
+	result.Summary = buildSummary(result, len(scan.Warnings))
+	result.Alerts = buildAlerts(result, scan.Truncated)
+	result.Recovery = recoveryGuide(result)
+	result.OK = len(result.Added) == 0 && len(result.Removed) == 0 && len(result.Modified) == 0
 
 	// 记录最近一次检查结论；写失败不掩盖本次检查结果，只降级为 warning。
 	baseline.LastCheckAt = result.CheckedAt
-	baseline.LastCheckOK = &ok
-	if saveErr := s.store.Save(baseline); saveErr != nil {
+	baseline.LastCheckOK = &result.OK
+	var saveErr error
+	if isCurrent {
+		saveErr = s.store.Save(baseline)
+	} else {
+		saveErr = s.store.SaveArchived(baseline)
+	}
+	if saveErr != nil {
 		result.Warnings = append(result.Warnings, "更新基线检查状态失败: "+saveErr.Error())
 	}
 	return result, nil
 }
 
-// status 返回基线元信息，不扫描文件系统。
+// status 返回当前基线元信息与历史数量，不扫描文件系统。
 func (s *Service) status(raw json.RawMessage) (any, *pluginapi.Error) {
 	if perr := decodeParams(raw, &struct{}{}); perr != nil {
 		return nil, perr
@@ -236,17 +405,27 @@ func (s *Service) status(raw json.RawMessage) (any, *pluginapi.Error) {
 		return nil, internalErr(err.Error())
 	}
 	createdAt := baseline.CreatedAt
+	id := baseline.ID
 	result := StatusResult{
-		HasBaseline: true,
-		CreatedAt:   &createdAt,
-		Entries:     len(baseline.Entries),
-		TotalBytes:  baseline.TotalBytes,
+		HasBaseline:   true,
+		CreatedAt:     &createdAt,
+		Entries:       len(baseline.Entries),
+		TotalBytes:    baseline.TotalBytes,
+		BaselineCount: 1,
+		LatestID:      &id,
+	}
+	if baseline.Note != "" {
+		note := baseline.Note
+		result.LatestNote = &note
 	}
 	if baseline.LastCheckAt != "" {
 		last := baseline.LastCheckAt
 		result.LastCheckAt = &last
 	}
 	result.LastCheckOK = baseline.LastCheckOK
+	if metas, listErr := s.store.ListSnapshots(); listErr == nil {
+		result.BaselineCount = len(metas)
+	}
 	return result, nil
 }
 
@@ -299,6 +478,18 @@ func decodeParams(raw json.RawMessage, dst any) *pluginapi.Error {
 	return nil
 }
 
+// normalizeNote 校验并归一化基线说明：≤200 字符，不含控制字符。
+func normalizeNote(raw string) (string, *pluginapi.Error) {
+	note := strings.TrimSpace(raw)
+	if len(note) > MaxNoteLen {
+		return "", invalid(fmt.Sprintf("note 超过 %d 字符上限", MaxNoteLen))
+	}
+	if hasControlRune(note) {
+		return "", invalid("note 含非法控制字符")
+	}
+	return note, nil
+}
+
 // validatePathCount 限制路径条数，防超大请求。
 func validatePathCount(paths []string) *pluginapi.Error {
 	if len(paths) > MaxPaths {
@@ -336,6 +527,7 @@ func compareEntries(before, current []Entry, now time.Time) CheckResult {
 		Added:     make([]string, 0),
 		Removed:   make([]string, 0),
 		Modified:  make([]ModifiedEntry, 0),
+		Alerts:    []CheckAlert{},
 		CheckedAt: now.Format(time.RFC3339Nano),
 	}
 	for path, entry := range present {

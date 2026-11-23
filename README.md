@@ -1,7 +1,9 @@
 # kore-plugin-integrity
 
 kore 的**关键文件完整性插件**：对关键文件建立 sha256 基线，按需比对篡改/新增/删除。
-`info.json.depth_level = "basic"`、`lifecycle = "lazy"`。
+`info.json.depth_level = "basic"`、`lifecycle = "lazy"`；方法级能力：读方法 `system:read`、
+`baseline` / `schedule.set` 为 `system:admin`（`verify_file` 因内核方法名语法不含下划线，
+回退到插件级 `system:read`）。
 
 ## 定位与边界
 
@@ -14,24 +16,70 @@ kore 的**关键文件完整性插件**：对关键文件建立 sha256 基线，
 
 | 方法（裸名 / 全名） | 入参 | 行为与返回 |
 | --- | --- | --- |
-| `integrity.baseline` / `baseline` | `{paths[], exclude?[]}` | 递归扫描并落基线（快照语义，再次调用覆盖）。返回 `{saved, entries, total_bytes, duration_ms, previous_entries, warnings?}` |
-| `integrity.check` / `check` | `{paths?, exclude?}` | 与基线比对。`paths` 省略时沿用基线扫描根；`exclude` 省略时沿用基线排除规则。返回 `{ok, added[], removed[], modified[], unchanged, checked_at, warnings?}` |
-| `integrity.status` / `status` | 无 | 基线元信息：`{has_baseline, created_at, entries, total_bytes, last_check_at, last_check_ok}`；从未建立的字段为 `null` |
+| `integrity.baseline` / `baseline` | `{paths[], exclude?[], note?, keep?}` | 递归扫描并生成新基线快照（旧快照进入历史）。`keep` 为保留快照总数（含当前，1..100，缺省 10）。返回 `{saved, id, note?, entries, total_bytes, duration_ms, previous_entries, archived_id?, kept, baseline_count, warnings?}` |
+| `integrity.baseline.list` / `baseline.list` | `{limit?}` | 列出当前与历史基线快照（不含 entries）：`{baselines[], count, keep}`；每条含 `id/created_at/note?/entries/total_bytes/last_check_at?/last_check_ok?/current` |
+| `integrity.check` / `check` | `{paths?, exclude?, baseline_id?}` | 与指定基线比对（`baseline_id` 空/`latest` = 当前）。返回 `{ok, baseline_id, added[], removed[], modified[], unchanged, checked_at, truncated, summary, alerts[], recovery, warnings?}` |
+| `integrity.status` / `status` | 无 | 当前基线 + 历史数量：`{has_baseline, created_at, entries, total_bytes, last_check_at, last_check_ok, baseline_count, latest_id, latest_note?}`；从未建立的字段为 `null` |
 | `integrity.verify_file` / `verify_file` | `{path, expected_sha256}` | 单文件校验：`{match, actual_sha256, expected_sha256}` |
+| `integrity.schedule.set` / `schedule.set` | `{schedule?, timeout_s?, paths?, exclude?, baseline_id?}` | 生成内核 scheduler 可消费的定时扫描任务描述（**不创建任务、不起 ticker**），返回 `{created=false, task_id="", saved, next_run_at, recommended_task, hint}` |
+| `integrity.schedule.get` / `schedule.get` | `{name?}` | 读回插件本地保存的任务描述：`{records[], count, hint}` |
 
 `modified[]` 每条为 `{path, old_sha256, new_sha256, old_mode, new_mode, changes[]}`，
 `changes` 只取 `sha256` / `mode` 两项——文件内容或权限位变化都会被抓到。
 
 `added` / `removed` 是路径字符串数组；`ok = len(added)+len(removed)+len(modified) == 0`。
 
-### 基线文件
+### 基线多版本
 
-`<KORE_STATE_DIR>/baseline.json`，权限 0600，原子写入（临时文件 + fsync + rename）。
-结构：`{version, created_at, roots[], exclude[], entries[], total_bytes, last_check_at?, last_check_ok?}`，
-`entries[]` 每项 `{path, sha256, size, mode, mtime, uid, gid}`。
-`check` 会回写 `last_check_at` / `last_check_ok`，不改动 `entries`（基线仍是建立时的快照）。
+```text
+<state>/baseline.json          当前（最新）基线（0600，临时文件 + fsync + rename 原子写）
+<state>/baselines/<id>.json    历史快照（0600）
+<state>/baselines/index.json   历史快照元信息（不含 entries，避免一次加载全部历史）
+```
 
-无基线时 `check` 返回 `E_NOTFOUND` + `detail.hint = "先调用 integrity.baseline 建立基线"`。
+- 每次 `baseline` 生成新快照 `baseline-<UTC 纳秒>`；旧当前基线先归档进历史，再替换当前。
+- 归档失败不会覆盖当前基线（先写历史、后写当前），不会丢上一份可用基线。
+- `keep` 保留最近 N 份（含当前）；超出部分删除并更新索引。`keep=1` 时只有当前基线。
+- `check.baseline_id` 可指定历史快照（用 `baseline.list` 查看）；省略或 `latest` 用当前基线。
+- 0.2.0 的单文件基线（`version=1`、无 `id`/`note`）仍可读，`id` 按 `created_at` 派生；
+  再建基线时自动归档为历史快照。
+- 无当前基线时 `check` 返回 `E_NOTFOUND` + `detail.hint = "先调用 integrity.baseline 建立基线"`；
+  指定不存在的快照返回 `E_NOTFOUND` + hint 指向 `baseline.list`。
+
+### 告警
+
+`check` 在返回体里给 `alerts[]`（**不发通知**，G-10 不出网；投递归主壳告警中心）：
+
+| code | metric | severity | 触发 |
+| --- | --- | --- | --- |
+| `file_removed` | `removed_files` | critical | 基线中的文件消失 |
+| `file_modified` | `modified_files` | critical | sha256 或权限位变化 |
+| `file_added` | `added_files` | warning | 出现未纳入基线的新文件 |
+| `scan_incomplete` | `skipped_entries` | warning | 扫描有跳过/告警或条目上限截断 |
+
+每条 alert 为 `{code, severity, metric, count, message, hint}`；`summary` 给出
+`{added, removed, modified, unchanged, skipped}` 计数。无差异时 `alerts=[]`。
+
+### 恢复 / 回滚边界（明确不做）
+
+本插件只做检测：**不保存文件内容，也不提供恢复/回滚**。`check.recovery` 恒为
+`{supported:false, owner:"backup", method:"backup.restore", hint}`，
+引导用户用 `backup` 插件的 `backup.list` / `backup.restore` 从已知良好的备份包恢复，
+恢复后重新执行 `integrity.baseline`。跨插件调用不在插件协议能力范围内，本仓不实现备份存储。
+
+### 定时扫描（交给内核 scheduler）
+
+- `schedule.set` **只返回任务描述，不创建内核任务**：`created=false`、`task_id=""`，
+  契约与 `backup.schedule.set` 一致（`next_run_at` + `recommended_task{name,plugin,method,params,schedule,timeout_s}`）
+- 把 `recommended_task` 原样 `POST /api/v1/scheduler/tasks` 才会真正生效；调度、错过补跑、
+  并发互斥都由内核 scheduler 负责
+- **插件内零 ticker / 零 AfterFunc / 零定时 goroutine**（G-19），lazy 插件空闲能真正退出；
+  `g19_test.go` 对源码做静态门禁
+- 默认 `0 4 * * *`（每天 04:00，与 backup 的 03:00 错开），`timeout_s` 缺省 1800（1–3600）
+- 任务参数与 `integrity.check` 同构；可绑定 `baseline_id` 到某个历史快照
+- 没有当前基线时 `schedule.set` 直接 `E_NOTFOUND`（避免装一个每天失败的任务）
+- `schedule.get` 只读插件本地 `schedule.json`，不代表内核任务状态；内核任务请查
+  `GET /api/v1/scheduler/tasks`
 
 ## 安全边界
 
@@ -63,7 +111,7 @@ kore 的**关键文件完整性插件**：对关键文件建立 sha256 基线，
 
 ```bash
 make build   # CGO_ENABLED=0 GOWORK=off GOAMD64=v1 go build -trimpath -buildvcs=false -ldflags="-s -w" -o bin/integrity .
-make dist    # 产出 dist/integrity-0.2.0.tar.gz（info.json + bin/integrity + SHA256SUMS）与同名 .sha256
+make dist    # 产出 dist/integrity-0.3.0.tar.gz（info.json + bin/integrity + SHA256SUMS）与同名 .sha256
 make check   # gofmt → go vet → go test -timeout 200s
 ```
 
@@ -87,5 +135,7 @@ GOWORK=off go test -v -run TestIntegrityE2E ./tests/e2e
 
 ## 未完成项（后续迭代）
 
-- 变更告警事件投递（`kore.event` / `plugin.alert`）与阈值策略。
+- 告警投递（`kore.event` / `plugin.alert`）与阈值/去重策略：本版只返回 `alerts[]`，不投递。
+- 恢复/回滚：明确不做（内容不在本仓存储，归 `backup` 插件；见上文边界）。
+- 前端页面：不在本仓范围（主壳 `web/integrity.js` 由主壳仓维护）。
 - cgroup 资源超限下的行为细化（当前依赖单文件/条目上限兜底）。
