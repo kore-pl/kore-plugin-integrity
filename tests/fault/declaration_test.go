@@ -11,8 +11,9 @@ import (
 
 // kernelMethodActionPattern 与内核 internal/core/registry 的 methodActionPattern 逐字一致
 // （kernel: internal/core/registry/validate.go；SDK: pkg/pluginapi/pluginapitest/infocheck.go）。
+// ADR-0047 起：段内允许下划线（camelCase | snake_case），段首仍限小写字母，连字符仍拒。
 // 内核用它校验 method_capabilities 键的动作段，不匹配即整份清单 fail-closed（E_INVALID）。
-var kernelMethodActionPattern = regexp.MustCompile(`^[a-z][a-zA-Z0-9]*(\.[a-z][a-zA-Z0-9]*)*$`)
+var kernelMethodActionPattern = regexp.MustCompile(`^[a-z][a-zA-Z0-9_]*(\.[a-z][a-zA-Z0-9_]*)*$`)
 
 // declaredInfo 是本测试关心的 info.json 字段。
 type declaredInfo struct {
@@ -41,26 +42,33 @@ func readRepoManifests(t *testing.T) (declaredInfo, declaredInfo) {
 
 // TestMethodDeclarationDriftFault 锁定「声明面 vs dispatch 白名单」的裁决口径。
 //
-// 事实：dispatch 白名单有 8 个动词（businessVerb），method_capabilities 只有 7 条，
-// 差集是 integrity.verify_file。这不是漏声明，而是**声明不出来**：
-// 内核 methodActionPattern 不允许下划线，把 verify_file 写进 method_capabilities
-// 会让整份清单 fail-closed（E_INVALID），插件直接装不上；缺口按设计回退插件级
-// capabilities（kernel validate.go：「未声明的方法…运行期回退插件级 capabilities」）。
+// 历史：dispatch 白名单有 8 个动词（businessVerb），method_capabilities 曾有 7 条，
+// 差集是 integrity.verify_file——当时不是漏声明，而是**声明不出来**：内核
+// methodActionPattern 不允许下划线，写进 method_capabilities 会让整份清单
+// fail-closed（E_INVALID），插件直接装不上，只能回退插件级 capabilities。
 //
-// 本用例是这条裁决的回归护栏：谁想"补齐声明"，先看它会不会把插件装崩。
+// **熔断器已按 ADR-0047 解除**：内核接受下划线后，verify_file 必须单列
+// system:read，否则只读方法仍回退到插件级最高要求（system:admin），被写进
+// 写/管理类审计。本用例转为反向护栏：谁把这条声明删掉，谁就得先重新裁决
+// 字符集（ADR-0047 §5 复审条件），不是改断言。
 func TestMethodDeclarationDriftFault(t *testing.T) {
 	info, manifest := readRepoManifests(t)
 
-	// 前提自检：一旦内核放宽了下划线，这条裁决就失效，必须重新裁决而不是沿用。
-	if kernelMethodActionPattern.MatchString("verify_file") {
-		t.Fatal("前提已变：内核 methodActionPattern 现在接受下划线，" +
-			"需重新裁决 integrity.verify_file 是否应单列 method_capabilities 声明")
+	// 前提自检（ADR-0047 已解除原熔断器）：内核接受下划线后，verify_file 必须可声明。
+	// 若此断言失败，说明字符集被收回——ADR-0047 必须重新裁决，而不是沿用旧结论。
+	if !kernelMethodActionPattern.MatchString("verify_file") {
+		t.Fatal("前提已变：内核 methodActionPattern 不再接受下划线，ADR-0047 被收回，" +
+			"需重新裁决 integrity.verify_file 的声明面")
 	}
 
-	// 差集那一项：verify_file 不能出现在声明面。
-	if capability, declared := info.MethodCapabilities["integrity.verify_file"]; declared {
-		t.Fatalf("integrity.verify_file=%q 不能声明在 method_capabilities："+
-			"动作段含下划线，内核 fail-closed 拒绝整份清单（插件装不上）", capability)
+	// 差集那一项：verify_file 必须出现在声明面，且只能是只读的 system:read。
+	capability, declared := info.MethodCapabilities["integrity.verify_file"]
+	if !declared {
+		t.Fatal("integrity.verify_file 必须单列 system:read（ADR-0047）：" +
+			"未声明会回退插件级最高要求 system:admin，只读方法被计入管理类审计")
+	}
+	if capability != "system:read" {
+		t.Fatalf("integrity.verify_file=%q，期望 system:read（该方法是只读校验）", capability)
 	}
 
 	// 已声明的每一条都必须过内核正则——否则同样是"装不上"级别的故障。

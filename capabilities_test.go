@@ -17,7 +17,7 @@ type manifestInfo struct {
 
 // kernelMethodActionPattern 与内核 internal/core/registry 的 methodActionPattern
 // 保持一致：动作段只能是小写字母开头的字母数字，或点分多段（不允许下划线）。
-var kernelMethodActionPattern = regexp.MustCompile(`^[a-z][a-zA-Z0-9]*(\.[a-z][a-zA-Z0-9]*)*$`)
+var kernelMethodActionPattern = regexp.MustCompile(`^[a-z][a-zA-Z0-9_]*(\.[a-z][a-zA-Z0-9_]*)*$`)
 
 // privilegedCapabilities 是内核认识的 6 项特权能力。
 var privilegedCapabilities = map[string]bool{
@@ -83,6 +83,7 @@ func TestMethodCapabilitiesDeclared(t *testing.T) {
 		"integrity.status":        "system:read",
 		"integrity.schedule.set":  "system:admin",
 		"integrity.schedule.get":  "system:read",
+		"integrity.verify_file":   "system:read",
 	}
 	for method, capability := range want {
 		got, ok := info.MethodCapabilities[method]
@@ -123,14 +124,17 @@ func TestMethodCapabilitiesDeclared(t *testing.T) {
 	}
 }
 
-// TestVerifyFileUndeclared 说明并锁定 verify_file 的兜底路径：
-// 内核方法级键不允许下划线，因此 verify_file 不在表内，回退到插件级 capabilities。
-// 插件级同时声明 read/admin（admin 是给 baseline/schedule.set 的），
-// 所以 verify_file 不再"仅 read"；本测试只保证它仍在插件级声明域内可用。
-func TestVerifyFileUndeclared(t *testing.T) {
+// TestVerifyFileReadOnlyDeclared 锁定 verify_file 的方法级声明（ADR-0047 反转原用例）：
+// 内核接受下划线后，verify_file 必须单列 system:read；插件级同时声明 read/admin
+// （admin 给 baseline/schedule.set），若不单列就会按最高要求被算成管理类。
+func TestVerifyFileReadOnlyDeclared(t *testing.T) {
 	info, _ := readManifest(t)
-	if _, declared := info.MethodCapabilities["integrity.verify_file"]; declared {
-		t.Fatal("integrity.verify_file 不应出现在 method_capabilities（内核 methodActionPattern 不允许下划线）")
+	capability, declared := info.MethodCapabilities["integrity.verify_file"]
+	if !declared {
+		t.Fatal("integrity.verify_file 必须出现在 method_capabilities（ADR-0047 后内核接受下划线）")
+	}
+	if capability != "system:read" {
+		t.Fatalf("integrity.verify_file=%q，期望 system:read", capability)
 	}
 	verb, ok := businessVerb("integrity.verify_file", "integrity")
 	if !ok || verb != "verify_file" {

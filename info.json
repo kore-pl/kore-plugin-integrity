@@ -1,7 +1,7 @@
 {
   "id": "integrity",
   "name": "关键文件完整性插件",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "protocol": "kore.plugin.v1",
   "lifecycle": "lazy",
   "depth_level": "production",
@@ -15,6 +15,7 @@
     "integrity.baseline.list": "system:read",
     "integrity.restore": "system:admin",
     "integrity.check": "system:read",
+    "integrity.verify_file": "system:read",
     "integrity.status": "system:read",
     "integrity.schedule.set": "system:admin",
     "integrity.schedule.get": "system:read"
@@ -31,5 +32,5 @@
   "scenario_tags": [
     "sec"
   ],
-  "size_bytes": 1468267
+  "size_bytes": 1468278
 }

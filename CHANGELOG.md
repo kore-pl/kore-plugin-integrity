@@ -2,6 +2,18 @@
 
 本仓库遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。
 
+## [0.5.0] - 2026-11-24
+
+### Changed
+
+- **`integrity.verify_file` 单列方法级能力 `system:read`**（ADR-0047）：内核
+  `methodActionPattern` 放宽字符集接受下划线后，只读校验方法不再回退到插件级最高要求
+  `system:admin`，`invoke` 审计口径恢复「只读不写管理类审计」。协议表达能力变化 →
+  minor bump（`0.4.0` → `0.5.0`，版本号变化改 dist sha，按 [docs/RELEASE.md] 要求 bump）。
+- **测试熔断器按 ADR-0047 解除并反向**：`tests/fault/declaration_test.go` 由「不得声明
+  verify_file」改为「必须声明且只能 `system:read`」；`capabilities_test.go` 的
+  `TestVerifyFileUndeclared` 反转为 `TestVerifyFileReadOnlyDeclared`。
+
 ## [0.4.0] - 2026-11-23
 
 ### Added
