@@ -2,8 +2,9 @@
 
 kore 的**关键文件完整性插件**：对关键文件建立 sha256 基线，按需比对篡改/新增/删除。
 `info.json.depth_level = "basic"`、`lifecycle = "lazy"`；方法级能力：读方法 `system:read`、
-`baseline` / `schedule.set` 为 `system:admin`（`verify_file` 因内核方法名语法不含下划线，
-回退到插件级 `system:read`）。
+`baseline` / `schedule.set` 为 `system:admin`；插件级声明 `system:read` + `system:admin`
+（方法级只收窄、不放大，用户在商店启用时确认的能力覆盖全部方法）。`verify_file` 因内核
+方法名语法不含下划线无法进表，回退到插件级声明。
 
 ## 定位与边界
 

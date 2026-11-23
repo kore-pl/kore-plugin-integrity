@@ -45,10 +45,14 @@ func readManifest(t *testing.T) (manifestInfo, manifestInfo) {
 
 // TestMethodCapabilitiesDeclared 校验方法级 capability 的语法、取值、覆盖与预期一致。
 //
-// 覆盖范围说明：check / status / verify_file 为 system:read，baseline 为 system:admin；
+// 覆盖范围说明：check / status 为 system:read，baseline 为 system:admin；
 // 新增的 baseline.list / schedule.get 为 read，schedule.set 为 admin。
 // verify_file 因内核 methodActionPattern 不允许下划线而无法出现在 method_capabilities，
-// 其有效能力由插件级 capabilities=system:read 兜底（见 TestVerifyFileFallsBackToRead）。
+// 回退到插件级 capabilities（见 TestVerifyFileUndeclared）。
+//
+// 插件级 capabilities 必须覆盖方法级所需的最强能力（只收窄、不放大）：
+// baseline / schedule.set 是 admin，因此插件级必须显式声明 system:admin，
+// 否则用户在商店启用时只确认了 read，实际却有 admin 方法（能力放大，SDK 自检会拒绝）。
 func TestMethodCapabilitiesDeclared(t *testing.T) {
 	info, manifest := readManifest(t)
 	if info.ID != "integrity" {
@@ -57,8 +61,16 @@ func TestMethodCapabilitiesDeclared(t *testing.T) {
 	if info.Version != manifest.Version {
 		t.Fatalf("info.json.version=%q 与 manifest.json.version=%q 不一致", info.Version, manifest.Version)
 	}
-	if len(info.Capabilities) != 1 || info.Capabilities[0] != "system:read" {
-		t.Fatalf("插件级 capabilities=%v，期望仅 system:read（方法级再覆盖 admin）", info.Capabilities)
+	if len(info.Capabilities) != 2 || info.Capabilities[0] != "system:read" || info.Capabilities[1] != "system:admin" {
+		t.Fatalf("插件级 capabilities=%v，期望 [system:read system:admin]（方法级含 admin 必须显式声明）", info.Capabilities)
+	}
+	if len(manifest.Capabilities) != len(info.Capabilities) {
+		t.Fatalf("manifest.json capabilities=%v 与 info.json=%v 不一致", manifest.Capabilities, info.Capabilities)
+	}
+	for i, capability := range info.Capabilities {
+		if manifest.Capabilities[i] != capability {
+			t.Fatalf("manifest.json capabilities[%d]=%q 与 info.json=%q 不一致", i, manifest.Capabilities[i], capability)
+		}
 	}
 	if len(info.MethodCapabilities) == 0 || len(info.MethodCapabilities) > 64 {
 		t.Fatalf("method_capabilities 条数=%d，期望 1..64", len(info.MethodCapabilities))
@@ -96,6 +108,11 @@ func TestMethodCapabilitiesDeclared(t *testing.T) {
 		if _, accepted := businessVerb(method, "integrity"); !accepted {
 			t.Errorf("method_capabilities 键 %q 未在 businessVerb 注册（声明了不存在的方法）", method)
 		}
+		// 只收窄、不放大：方法级强度不得超过插件级同域最高声明。
+		if capabilityStrength(capability) > pluginCapabilityStrength(info.Capabilities, capabilityDomain(capability)) {
+			t.Errorf("method_capabilities[%q]=%q 强于插件级 capabilities=%v（能力放大，用户启用确认的范围被缩小）",
+				method, capability, info.Capabilities)
+		}
 	}
 	// 当前没有 config 契约：不应出现 config.* 的方法级声明。
 	for _, method := range []string{"integrity.config.get", "integrity.config.set"} {
@@ -105,9 +122,11 @@ func TestMethodCapabilitiesDeclared(t *testing.T) {
 	}
 }
 
-// TestVerifyFileFallsBackToRead 说明并锁定 verify_file 的兜底能力：
-// 内核方法级键不允许下划线，因此 verify_file 不在表内，回退到插件级 system:read。
-func TestVerifyFileFallsBackToRead(t *testing.T) {
+// TestVerifyFileUndeclared 说明并锁定 verify_file 的兜底路径：
+// 内核方法级键不允许下划线，因此 verify_file 不在表内，回退到插件级 capabilities。
+// 插件级同时声明 read/admin（admin 是给 baseline/schedule.set 的），
+// 所以 verify_file 不再"仅 read"；本测试只保证它仍在插件级声明域内可用。
+func TestVerifyFileUndeclared(t *testing.T) {
 	info, _ := readManifest(t)
 	if _, declared := info.MethodCapabilities["integrity.verify_file"]; declared {
 		t.Fatal("integrity.verify_file 不应出现在 method_capabilities（内核 methodActionPattern 不允许下划线）")
@@ -116,9 +135,51 @@ func TestVerifyFileFallsBackToRead(t *testing.T) {
 	if !ok || verb != "verify_file" {
 		t.Fatalf("verify_file 必须仍被业务层接受，得到 verb=%q ok=%v", verb, ok)
 	}
-	if len(info.Capabilities) != 1 || info.Capabilities[0] != "system:read" {
-		t.Fatalf("verify_file 的有效能力应回退到插件级 system:read，实际 capabilities=%v", info.Capabilities)
+	if pluginCapabilityStrength(info.Capabilities, "system") < capabilityStrength("system:read") {
+		t.Fatalf("插件级 capabilities=%v 至少应包含 system:read，才能兜底 verify_file", info.Capabilities)
 	}
+}
+
+// capabilityDomain 返回能力项的域（system / net / proc）。
+func capabilityDomain(capability string) string {
+	for i, r := range capability {
+		if r == ':' {
+			return capability[:i]
+		}
+	}
+	return capability
+}
+
+// capabilityStrength 返回同域内的强度：read=1 < write=2 < admin=3；非法项返回 0。
+func capabilityStrength(capability string) int {
+	domain := capabilityDomain(capability)
+	if len(capability) <= len(domain)+1 || capability[len(domain)] != ':' {
+		return 0
+	}
+	switch capability[len(domain)+1:] {
+	case "read":
+		return 1
+	case "write":
+		return 2
+	case "admin":
+		return 3
+	default:
+		return 0
+	}
+}
+
+// pluginCapabilityStrength 返回插件级在指定域的最高声明强度。
+func pluginCapabilityStrength(capabilities []string, domain string) int {
+	best := 0
+	for _, capability := range capabilities {
+		if capabilityDomain(capability) != domain {
+			continue
+		}
+		if strength := capabilityStrength(capability); strength > best {
+			best = strength
+		}
+	}
+	return best
 }
 
 // cutDomain 去掉插件 id 前缀。

@@ -2,6 +2,17 @@
 
 本仓库遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。
 
+## [0.3.1] - 2026-11-23
+
+### 修复
+
+- fix: 插件级 capabilities 补 system:admin（方法级含 admin 方法，原声明会误导用户启用确认的范围）
+  - `baseline` / `schedule.set` 是 `system:admin`，但 `info.json.capabilities` 只声明了
+    `system:read`——用户在商店启用时只确认了 read，实际却有 admin 方法（能力放大）。
+  - 插件级改为 `["system:read", "system:admin"]`，`manifest.json` 同步；方法级声明不变。
+  - `capabilities_test.go` 同步：断言插件级两项且与 manifest 一致，并新增「方法级不得强于
+    插件级」的本地校验；`TestVerifyFileUndeclared` 如实反映 verify_file 回退到插件级域。
+
 ## [0.3.0] - 2026-11-23
 
 ### 新增
