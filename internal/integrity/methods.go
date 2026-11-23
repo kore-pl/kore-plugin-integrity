@@ -90,6 +90,12 @@ type RestoreResult struct {
 	Restored   bool   `json:"restored"`
 	BackupPath string `json:"backup_path,omitempty"`
 	Hint       string `json:"hint"`
+	// Verified 是恢复后自动复核的结论；Changes 是复核发现的差异条数。
+	Verified bool `json:"verified"`
+	Changes  int  `json:"changes"`
+	// Alerts 是复核告警（结构同 check.alerts），供主壳告警中心消费。
+	Alerts  []CheckAlert `json:"alerts,omitempty"`
+	Message string       `json:"message,omitempty"`
 }
 
 // BaselineListResult 是 integrity.baseline.list 的结果。
@@ -126,13 +132,15 @@ type CheckResult struct {
 	Added      []string        `json:"added"`
 	Removed    []string        `json:"removed"`
 	Modified   []ModifiedEntry `json:"modified"`
-	Unchanged  int             `json:"unchanged"`
-	CheckedAt  string          `json:"checked_at"`
-	Truncated  bool            `json:"truncated"`
-	Summary    CheckSummary    `json:"summary"`
-	Alerts     []CheckAlert    `json:"alerts"`
-	Recovery   RecoveryGuide   `json:"recovery"`
-	Warnings   []string        `json:"warnings,omitempty"`
+	// Changes 是带 severity 的结构化变更（added/removed/modified 摊平），供告警中心直接消费。
+	Changes   []ChangeEntry `json:"changes"`
+	Unchanged int           `json:"unchanged"`
+	CheckedAt string        `json:"checked_at"`
+	Truncated bool          `json:"truncated"`
+	Summary   CheckSummary  `json:"summary"`
+	Alerts    []CheckAlert  `json:"alerts"`
+	Recovery  RecoveryGuide `json:"recovery"`
+	Warnings  []string      `json:"warnings,omitempty"`
 }
 
 // StatusResult 是 integrity.status 的结果；从未建立的字段为 null 而不是零值。
@@ -257,6 +265,21 @@ func (s *Service) restore(raw json.RawMessage) (any, *pluginapi.Error) {
 	}
 	result.Restored = true
 	result.Hint = "已恢复为历史快照；原当前基线已备份到 backup_path 并归档进历史"
+	// 恢复后自动复核：恢复的是"基线记录"而不是文件内容；当前文件若与目标基线不一致，
+	// 必须如实告诉用户"恢复成功但仍有差异"，不能让人误以为恢复=干净。
+	if checked, perr := s.check(json.RawMessage(`{}`)); perr != nil {
+		result.Verified = false
+		result.Message = "恢复成功但复核失败：" + perr.Message
+	} else if recheck, ok := checked.(CheckResult); ok {
+		result.Verified = recheck.OK
+		result.Changes = len(recheck.Changes)
+		result.Alerts = recheck.Alerts
+		if recheck.OK {
+			result.Message = "恢复成功且复核无差异"
+		} else {
+			result.Message = fmt.Sprintf("恢复成功但复核发现仍有 %d 处不一致", len(recheck.Changes))
+		}
+	}
 	return result, nil
 }
 
@@ -465,6 +488,7 @@ func (s *Service) check(raw json.RawMessage) (any, *pluginapi.Error) {
 	result.Warnings = scan.Warnings
 	result.Summary = buildSummary(result, len(scan.Warnings))
 	result.Alerts = buildAlerts(result, scan.Truncated)
+	result.Changes = buildChanges(result)
 	result.Recovery = recoveryGuide(result)
 	result.OK = len(result.Added) == 0 && len(result.Removed) == 0 && len(result.Modified) == 0
 

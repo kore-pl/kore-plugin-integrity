@@ -2,6 +2,25 @@
 
 本仓库遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。
 
+## [0.4.0] - 2026-11-23
+
+### Added
+
+- **定时扫描（交给内核 scheduler）**：`integrity.schedule.set` 生成可 POST 到
+  `/api/v1/scheduler/tasks` 的任务描述（`integrity.check`，默认 `0 4 * * *`），返回
+  `{id, schedule, next_run, next_run_at, recommended_task}`；`integrity.schedule.get` 读回本地描述。
+  插件内**零 ticker / 零定时 goroutine**（G-19），真正的调度由内核 scheduler 负责。
+- **结构化变更与告警**：`check.changes[]` 摊平 added/removed/modified 并带 `severity`
+  （critical=系统二进制/配置：`/etc`、`/bin`、`/sbin`、`/lib*`、`/boot`、`/usr/{bin,sbin,lib}*`、
+  `/usr/local/{bin,sbin,lib}`；其余 warning），与 `alerts[]` 一起供主壳告警中心消费（插件不发通知）。
+- **恢复后自动复核**：`integrity.restore` 成功后立即跑一次 `check`，返回
+  `{verified, changes, alerts[], message}`；仍有差异时 message 明确「恢复成功但复核发现仍有 N 处
+  不一致」，避免把"恢复基线记录"误读成"文件已回滚干净"。
+
+### Tests
+
+- `recheck_test.go`：恢复后复核两种结局（仍有差异 / 无差异）、severity 判据、任务三要素与幂等。
+
 ## [0.3.3] - 2026-11-23
 
 ### 新增

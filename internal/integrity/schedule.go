@@ -77,9 +77,13 @@ type scheduleSetParams struct {
 // ScheduleSetResult 是 integrity.schedule.set 的结果；created/task_id 恒为 false/空，
 // 如实表达"插件没有创建内核任务的能力"。
 type ScheduleSetResult struct {
-	Created         bool            `json:"created"`
-	TaskID          string          `json:"task_id"`
-	Saved           bool            `json:"saved"`
+	Created bool   `json:"created"`
+	TaskID  string `json:"task_id"`
+	Saved   bool   `json:"saved"`
+	// ID / Schedule / NextRun 是任务描述的稳定三要素（内核 scheduler 创建后以其返回为准）。
+	ID              string          `json:"id"`
+	Schedule        string          `json:"schedule"`
+	NextRun         string          `json:"next_run"`
 	NextRunAt       string          `json:"next_run_at"`
 	RecommendedTask RecommendedTask `json:"recommended_task"`
 	Hint            string          `json:"hint"`
@@ -189,6 +193,9 @@ func (s *Service) scheduleSet(raw json.RawMessage) (any, *pluginapi.Error) {
 		Created:         false,
 		TaskID:          "",
 		Saved:           true,
+		ID:              scheduleTaskName,
+		Schedule:        schedule,
+		NextRun:         nextAt,
 		NextRunAt:       nextAt,
 		RecommendedTask: task,
 		Hint:            scheduleHint,
