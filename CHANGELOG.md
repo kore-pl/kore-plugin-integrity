@@ -2,6 +2,12 @@
 
 本仓库遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。
 
+## [0.5.1] - 2026-11-24
+
+### Changed
+
+- **`depth_level`: `production` → `basic`**. Upgrade criterion ① in `kore/docs/PLUGIN-CATALOG.md` §6.1 (boundary cases: invalid input / concurrency / insufficient permission / resource exhaustion, each ≥1 case wired into CI) is **not met** — this repo has no `tests/boundary/` and `grep -rn "t.Parallel" tests/` returns 0. Fault injection (criterion ②) passes, but both must hold; the previous `production` claim was an **over-declaration** and the index value `basic` is correct. **Not a regression defect**: no code, capability or method-contract change; production can be re-claimed once boundary cases land.
+
 ## [0.5.0] - 2026-11-24
 
 ### Changed

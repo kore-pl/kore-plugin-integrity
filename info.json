@@ -1,10 +1,10 @@
 {
   "id": "integrity",
   "name": "关键文件完整性插件",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "protocol": "kore.plugin.v1",
   "lifecycle": "lazy",
-  "depth_level": "production",
+  "depth_level": "basic",
   "entry": "bin/integrity",
   "capabilities": [
     "system:read",
@@ -32,5 +32,5 @@
   "scenario_tags": [
     "sec"
   ],
-  "size_bytes": 1468278
+  "size_bytes": 1468286
 }
