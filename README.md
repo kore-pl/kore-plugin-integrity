@@ -1,5 +1,7 @@
 # kore-plugin-integrity
 
+语言：[简体中文](docs/DETAIL.md) · [English](docs/DETAIL.en.md) · [Español](docs/DETAIL.es.md) · [Français](docs/DETAIL.fr.md) · [Deutsch](docs/DETAIL.de.md) · [Русский](docs/DETAIL.ru.md) · [Português](docs/DETAIL.pt.md)
+
 kore 的**关键文件完整性插件**：对关键文件建立 sha256 基线，按需比对篡改/新增/删除。
 `info.json.depth_level = "basic"`、`lifecycle = "lazy"`；方法级能力：读方法 `system:read`、
 `baseline` / `restore` / `schedule.set` 为 `system:admin`；插件级声明 `system:read` + `system:admin`
@@ -144,6 +146,11 @@ GOWORK=off go test -v -run TestIntegrityE2E ./tests/e2e
 - 恢复/回滚：明确不做（内容不在本仓存储，归 `backup` 插件；见上文边界）。
 - 前端页面：不在本仓范围（主壳 `web/integrity.js` 由主壳仓维护）。
 - cgroup 资源超限下的行为细化（当前依赖单文件/条目上限兜底）。
+
+
+## 支持本项目
+
+如果 关键文件完整性插件 帮你省了时间，欢迎在 [GitHub](https://github.com/kore-pl/kore-plugin-integrity) 点个 ⭐ Star——这是作者继续维护的最大动力。也欢迎提 issue、PR 或参与讨论。
 
 <!-- oss:begin -->
 ## 开源与贡献
