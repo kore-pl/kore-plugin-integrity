@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "kore-plugin-integrity (Plugin für die Integrität kritischer Dateien)",
+    "description": "Erstellt eine sha256-Baseline kritischer Dateien und vergleicht sie bei Bedarf, um geänderte, hinzugefügte oder gelöschte Dateien zu melden. Das Plugin liest nur Dateien und berechnet Hashes und Metadaten: es liest niemals Dateiinhalte, verändert keine geprüften Dateien, erhöht k",
+    "detail": "docs/DETAIL.de.md"
+  }
+}

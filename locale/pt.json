@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "kore-plugin-integrity (plugin de integridade de arquivos críticos)",
+    "description": "Cria uma linha de base sha256 de arquivos críticos e os compara sob demanda, relatando arquivos modificados, adicionados ou removidos. O plugin apenas lê arquivos e calcula hashes e metadados: nunca lê conteúdos, não modifica arquivos verificados, não eleva privilégios e não emit",
+    "detail": "docs/DETAIL.pt.md"
+  }
+}

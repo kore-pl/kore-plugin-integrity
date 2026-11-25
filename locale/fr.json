@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "kore-plugin-integrity (plugin d'intégrité des fichiers critiques)",
+    "description": "Construit une base de référence sha256 des fichiers critiques et la compare à la demande, en signalant les fichiers modifiés, ajoutés ou supprimés. Le plugin ne fait que lire les fichiers et calculer les empreintes et métadonnées : il ne lit jamais le contenu, ne modifie pas les ",
+    "detail": "docs/DETAIL.fr.md"
+  }
+}

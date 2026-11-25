@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "kore-plugin-integrity (critical file integrity plugin)",
+    "description": "Builds a sha256 baseline of critical files and compares on demand, reporting modified, added or removed files. The plugin only reads files and computes hashes and metadata: it never reads file contents, modifies scanned files, escalates privileges or emits events. depth_level=bas",
+    "detail": "docs/DETAIL.en.md"
+  }
+}

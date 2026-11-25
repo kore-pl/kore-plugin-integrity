@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "kore-plugin-integrity（关键文件完整性插件）",
+    "description": "对关键文件建立 **sha256 基线**，之后按需比对，报告文件被篡改、新增或删除。插件只读文件、计算哈希与元数据，**不读文件内容、不改被扫描文件、不提权、不投递事件**。深度等级 `basic`，生命周期 `lazy`，协议 `kore.plugin.v1`。 读方法声明 `system:read`；`baseline` / `restore` / `schedule.set` 为 `system:admin`；插件级声明 `system:read` + `system:admin`（方法级只收窄、不放大）。`verify_file` 因内核方法名",
+    "detail": "docs/DETAIL.md"
+  }
+}
