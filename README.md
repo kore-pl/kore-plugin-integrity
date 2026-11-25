@@ -18,16 +18,18 @@ kore 的**关键文件完整性插件**：对关键文件建立 sha256 基线，
 | 方法（裸名 / 全名） | 入参 | 行为与返回 |
 | --- | --- | --- |
 | `integrity.baseline` / `baseline` | `{paths[], exclude?[], note?, keep?}` | 递归扫描并生成新基线快照（旧快照进入历史）。`keep` 为保留快照总数（含当前，1..100，缺省 10）。返回 `{saved, id, note?, entries, total_bytes, duration_ms, previous_entries, archived_id?, kept, baseline_count, warnings?}` |
-| `integrity.baseline.list` / `baseline.list` | `{limit?}` | 列出当前与历史基线快照（不含 entries）：`{baselines[], count, keep}`；每条含 `id/created_at/note?/entries/total_bytes/last_check_at?/last_check_ok?/current` |
+| `integrity.baseline.list` / `baseline.list` | `{limit?}` | 列出当前与历史基线快照（不含 entries）：`{baselines[], count, keep, roots[]}`（`roots` 是**当前基线**的扫描根，0.6.0 起）；每条含 `id/created_at/note?/entries/total_bytes/last_check_at?/last_check_ok?/current/roots?` |
 | `integrity.restore` / `restore` | `{baseline_id}` | 把历史快照恢复为当前基线：覆盖前把当前基线备份为 `<state>/baseline.bak.<ts>.json` 并归档进历史；返回 `{from_id, to_id, entries, restored, backup_path?, hint, verified, changes, alerts[], message?}`；恢复成功后自动跑一次 check 复核（`verified` + 变更数，仍有差异时 message 明说） |
 | `integrity.check` / `check` | `{paths?, exclude?, baseline_id?}` | 与指定基线比对（`baseline_id` 空/`latest` = 当前）。返回 `{ok, baseline_id, added[], removed[], modified[], changes[], unchanged, checked_at, truncated, summary, alerts[], recovery, warnings?}`；`changes[]` 带 `severity`（critical=系统二进制/配置，warning=普通文件） |
-| `integrity.status` / `status` | 无 | 当前基线 + 历史数量：`{has_baseline, created_at, entries, total_bytes, last_check_at, last_check_ok, baseline_count, latest_id, latest_note?}`；从未建立的字段为 `null` |
+| `integrity.status` / `status` | 无 | 当前基线 + 历史数量 + 扫描历史：`{has_baseline, created_at, entries, total_bytes, last_check_at, last_check_ok, baseline_count, latest_id, latest_note?, scan_history[]}`；从未建立的字段为 `null`；`scan_history` 恒为数组（0.6.0 起，最近 20 次汇总，最新在前） |
 | `integrity.verify_file` / `verify_file` | `{path, expected_sha256}` | 单文件校验：`{match, actual_sha256, expected_sha256}` |
 | `integrity.schedule.set` / `schedule.set` | `{schedule?, timeout_s?, paths?, exclude?, baseline_id?}` | 生成内核 scheduler 可消费的定时扫描任务描述（**不创建任务、不起 ticker**），返回 `{created=false, task_id="", saved, id, schedule, next_run, next_run_at, recommended_task, hint}` |
 | `integrity.schedule.get` / `schedule.get` | `{name?}` | 读回插件本地保存的任务描述：`{records[], count, hint}` |
 
-`modified[]` 每条为 `{path, old_sha256, new_sha256, old_mode, new_mode, changes[]}`，
-`changes` 只取 `sha256` / `mode` 两项——文件内容或权限位变化都会被抓到。
+`modified[]` 每条为 `{path, old_sha256, new_sha256, old_mode, new_mode, old_size, new_size, size_delta, changes[]}`，
+`changes` 只取 `sha256` / `mode` 两项——文件内容或权限位变化都会被抓到；
+体积三件套（0.6.0 起）是**可加性**字段：`size_delta = new_size - old_size`，
+只改权限时为 `0`，不单独作为第三种 change 出现。
 
 `added` / `removed` 是路径字符串数组；`ok = len(added)+len(removed)+len(modified) == 0`。
 
@@ -36,7 +38,8 @@ kore 的**关键文件完整性插件**：对关键文件建立 sha256 基线，
 ```text
 <state>/baseline.json          当前（最新）基线（0600，临时文件 + fsync + rename 原子写）
 <state>/baselines/<id>.json    历史快照（0600）
-<state>/baselines/index.json   历史快照元信息（不含 entries，避免一次加载全部历史）
+<state>/baselines/index.json   历史快照元信息（不含 entries，避免一次加载全部历史；0.6.0 起含 roots）
+<state>/scans.json             最近 20 次 check 的汇总（0600；只记计数，不记逐文件明细）
 ```
 
 - 每次 `baseline` 生成新快照 `baseline-<UTC 纳秒>`；旧当前基线先归档进历史，再替换当前。

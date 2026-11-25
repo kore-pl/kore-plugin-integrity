@@ -72,6 +72,11 @@ type SnapshotMeta struct {
 	TotalBytes  int64  `json:"total_bytes"`
 	LastCheckAt string `json:"last_check_at,omitempty"`
 	LastCheckOK *bool  `json:"last_check_ok,omitempty"`
+	// Roots 是该快照建立时记录的扫描根，随索引落盘（0.6.0 起），供 baseline.list
+	// 直接回报"这个版本扫的是哪些路径"，无需为列表再解析完整的快照文件。
+	// 上界：keep ≤ MaxBaselineKeep(100) × paths ≤ MaxPaths(256)，全打满约 1 MB；
+	// 默认 keep=10 时约 100 KiB 量级，远小于单插件内存红线（G-03）。
+	Roots []string `json:"roots,omitempty"`
 	// Current 是计算字段：该快照是否为当前基线；不写入索引。
 	Current bool `json:"current,omitempty"`
 }
@@ -451,7 +456,7 @@ func validateSnapshotID(id string) error {
 
 // metaFromBaseline 从完整基线提取元信息。
 func metaFromBaseline(baseline *Baseline) SnapshotMeta {
-	return SnapshotMeta{
+	meta := SnapshotMeta{
 		ID:          baseline.ID,
 		CreatedAt:   baseline.CreatedAt,
 		Note:        baseline.Note,
@@ -460,6 +465,10 @@ func metaFromBaseline(baseline *Baseline) SnapshotMeta {
 		LastCheckAt: baseline.LastCheckAt,
 		LastCheckOK: baseline.LastCheckOK,
 	}
+	if len(baseline.Roots) > 0 {
+		meta.Roots = append([]string{}, baseline.Roots...)
+	}
+	return meta
 }
 
 // upsertMeta 按 id 覆盖或追加元信息。

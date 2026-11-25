@@ -2,6 +2,41 @@
 
 本仓库遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。
 
+## [0.6.0] - 2026-11-25
+
+### Added
+
+- **`check` 的 `modified[]` 带体积三件套** `old_size` / `new_size` / `size_delta`
+  （`internal/integrity/methods.go`）：基线条目自 0.1.0 起就落盘了 `Entry.Size`
+  （`scan.go` `newEntry`），所以**旧基线也能量出体积变化**，不需要重建基线。
+  `changes[]` 仍只报 `sha256` / `mode`——体积变化不作为第三种判定原因，既有消费方
+  对 `changes` 长度的断言不受影响。纯可加性字段，无破坏性协议变化。
+- **`baseline.list` 回报扫描根 `roots`**：结果级 `roots` 是当前基线的扫描根；每个版本
+  条目带自己的 `roots`（随 `baselines/index.json` 落盘，`SnapshotMeta.Roots`）。
+  上界 keep(100) × paths(256)，默认 keep=10 时约 100 KiB 量级（G-03）。0.6.0 之前归档的
+  快照索引里没有该字段，读取为空数组 = "当时没记"，不是"没有路径"。
+- **扫描历史 `scans.json` + `status.scan_history`**：每次 `check` 追加一条汇总
+  （时刻 / 基线 id / 结论 / 新增·修改·删除·未变化·跳过计数 / 截断 / 耗时），只保留最近
+  `MaxScanHistory=20` 次，落盘上界约 4 KiB（20 × ~200 B）。**只记计数不记逐文件明细**：
+  明细会让落盘与内存随扫描次数线性膨胀（G-03），逐文件明细仍由主壳前端按次留存。
+  该文件是**辅助轨道**：损坏时按空处理并在下一次 `check` 覆盖重写（自愈），
+  不让一条历史日志把 `check` / `status` 拖死；基线与快照索引仍严格 fail-closed。
+
+### Changed
+
+- 主壳前端 `web/integrity.js` 消费以上三处字段：变更表的「变化」列显示
+  `1.2 KiB → 1.4 KiB (+200 B)`；概览「扫描范围」改用 `baseline.list.roots` 真值
+  （不再依赖本页 localStorage 记忆）；新增「扫描历史」面板（换浏览器也在）。
+  旧版本插件（无这些字段）时前端逐项回退到原有口径并显示「—」，不崩。
+
+### Notes
+
+- **发行产物（`dist/`）与索引/签名未在本轮重建**：按任务卡约束，`make dist` 与
+  `kore-plugins` 索引重签留到发版批次；因此 `info.json.size_bytes` 仍是 0.5.1 的量级，
+  下次 `make dist` 会按固定点算法回收口值。
+- 领域文档（`kore/docs/PLUGIN-MATURITY.md` 的完整性行 / 方法数）不在本仓写域，
+  留给 docs owner 收口。
+
 ## [0.5.1] - 2026-11-24
 
 ### Changed

@@ -72,6 +72,9 @@ type BaselineListItem struct {
 	LastCheckAt string `json:"last_check_at,omitempty"`
 	LastCheckOK *bool  `json:"last_check_ok,omitempty"`
 	Current     bool   `json:"current"`
+	// Roots 是该版本建立时记录的扫描根（0.6.0 起随索引落盘）。0.6.0 之前归档的
+	// 历史快照索引里没有这个字段，读取时为空数组——表示"当时没记"，不是"没有路径"。
+	Roots []string `json:"roots,omitempty"`
 }
 
 // restoreParams 是 integrity.restore 的入参。
@@ -103,15 +106,28 @@ type BaselineListResult struct {
 	Baselines []BaselineListItem `json:"baselines"`
 	Count     int                `json:"count"`
 	Keep      int                `json:"keep"`
+	// Roots 是**当前基线**的扫描根（0.6.0 起）。前端此前只能靠本页记忆或定时任务
+	// 参数反读扫描范围，换浏览器就丢；这里直接给出真值。没有当前基线时为空数组。
+	Roots []string `json:"roots"`
 }
 
-// ModifiedEntry 是单条被修改文件的结构化差异（只比 sha256 与 mode）。
+// ModifiedEntry 是单条被修改文件的结构化差异（比 sha256 / mode，并带体积变化）。
+//
+// 体积三件套是 0.6.0 的**可加性**字段：Entry.Size 自 0.1.0 起就在基线文件里落盘
+// （scan.go newEntry），所以旧基线也能量出体积变化；Changes 仍只报 sha256 / mode
+// 两种判定原因，体积变化不作为第三种 change 出现——sha256 一变体积自然跟着变，
+// 再报一条会让「changes 里每项都是一个判定原因」的口径失真，也会打破既有消费方
+// 对 changes 长度的断言。
 type ModifiedEntry struct {
-	Path      string   `json:"path"`
-	OldSHA256 string   `json:"old_sha256"`
-	NewSHA256 string   `json:"new_sha256"`
-	OldMode   string   `json:"old_mode"`
-	NewMode   string   `json:"new_mode"`
+	Path      string `json:"path"`
+	OldSHA256 string `json:"old_sha256"`
+	NewSHA256 string `json:"new_sha256"`
+	OldMode   string `json:"old_mode"`
+	NewMode   string `json:"new_mode"`
+	// OldSize / NewSize 是修改前 / 后的文件字节数；SizeDelta = NewSize - OldSize。
+	OldSize   int64    `json:"old_size"`
+	NewSize   int64    `json:"new_size"`
+	SizeDelta int64    `json:"size_delta"`
 	Changes   []string `json:"changes"`
 }
 
@@ -154,6 +170,9 @@ type StatusResult struct {
 	BaselineCount int     `json:"baseline_count"`
 	LatestID      *string `json:"latest_id"`
 	LatestNote    *string `json:"latest_note,omitempty"`
+	// ScanHistory 是最近 MaxScanHistory 次 check 的汇总（最新在前，只记计数不记逐文件
+	// 明细）。0.6.0 起由插件落盘，换浏览器 / 清缓存后仍能看到"上次扫描是几点、改了几条"。
+	ScanHistory []ScanRecord `json:"scan_history"`
 }
 
 // VerifyFileResult 是 integrity.verify_file 的结果。
@@ -407,10 +426,15 @@ func (s *Service) baselineList(raw json.RawMessage) (any, *pluginapi.Error) {
 	if err != nil {
 		return nil, internalErr(err.Error())
 	}
-	result := BaselineListResult{Baselines: []BaselineListItem{}, Keep: DefaultBaselineKeep}
+	result := BaselineListResult{Baselines: []BaselineListItem{}, Keep: DefaultBaselineKeep, Roots: []string{}}
 	for _, meta := range metas {
+		// 当前基线的扫描根直接取自内存里的完整基线（ListSnapshots 已加载它），
+		// 不需要为列表再读一次 baseline.json；历史版本的 roots 来自索引。
+		if meta.Current && len(meta.Roots) > 0 {
+			result.Roots = append([]string{}, meta.Roots...)
+		}
 		if len(result.Baselines) >= limit {
-			break
+			continue
 		}
 		result.Baselines = append(result.Baselines, BaselineListItem{
 			ID:          meta.ID,
@@ -421,6 +445,7 @@ func (s *Service) baselineList(raw json.RawMessage) (any, *pluginapi.Error) {
 			LastCheckAt: meta.LastCheckAt,
 			LastCheckOK: meta.LastCheckOK,
 			Current:     meta.Current,
+			Roots:       append([]string{}, meta.Roots...),
 		})
 	}
 	result.Count = len(result.Baselines)
@@ -478,6 +503,7 @@ func (s *Service) check(raw json.RawMessage) (any, *pluginapi.Error) {
 	if len(exclude) == 0 {
 		exclude = baseline.Exclude
 	}
+	started := s.now()
 	scan, perr := s.scanner.Scan(paths, exclude)
 	if perr != nil {
 		return nil, perr
@@ -504,6 +530,11 @@ func (s *Service) check(raw json.RawMessage) (any, *pluginapi.Error) {
 	if saveErr != nil {
 		result.Warnings = append(result.Warnings, "更新基线检查状态失败: "+saveErr.Error())
 	}
+	// 扫描历史（最近 MaxScanHistory 次汇总）供 status 回读：只记计数，不记逐文件明细。
+	// 写失败同样只降级为 warning——检查结果本身已经产出了。
+	if histErr := s.store.AppendScan(scanRecordOf(result, baseline.ID, s.now().Sub(started).Milliseconds())); histErr != nil {
+		result.Warnings = append(result.Warnings, "记录扫描历史失败: "+histErr.Error())
+	}
 	return result, nil
 }
 
@@ -518,7 +549,12 @@ func (s *Service) status(raw json.RawMessage) (any, *pluginapi.Error) {
 	baseline, err := s.store.Load()
 	if err != nil {
 		if errors.Is(err, ErrNoBaseline) {
-			return StatusResult{HasBaseline: false}, nil
+			// 没有基线也可能有扫描历史（例如基线被 restore 归档后），如实带上。
+			history, _ := s.store.ScanHistory()
+			if history == nil {
+				history = []ScanRecord{}
+			}
+			return StatusResult{HasBaseline: false, ScanHistory: history}, nil
 		}
 		return nil, internalErr(err.Error())
 	}
@@ -543,6 +579,12 @@ func (s *Service) status(raw json.RawMessage) (any, *pluginapi.Error) {
 	result.LastCheckOK = baseline.LastCheckOK
 	if metas, listErr := s.store.ListSnapshots(); listErr == nil {
 		result.BaselineCount = len(metas)
+	}
+	// 扫描历史是辅助轨道：读不出来时给空数组（前端据此回退到本页记录），
+	// 不把整个状态读取打成失败。
+	result.ScanHistory = []ScanRecord{}
+	if history, histErr := s.store.ScanHistory(); histErr == nil {
+		result.ScanHistory = history
 	}
 	return result, nil
 }
@@ -662,12 +704,17 @@ func compareEntries(before, current []Entry, now time.Time) CheckResult {
 			changed = append(changed, "mode")
 		}
 		if len(changed) > 0 {
+			// 体积只在"确实改了"的行上算差值：新增 / 删除行没有可比的另一侧，
+			// 报 0 会被读成"大小没变"，所以那两个分支不做体积口径。
 			result.Modified = append(result.Modified, ModifiedEntry{
 				Path:      path,
 				OldSHA256: old.SHA256,
 				NewSHA256: entry.SHA256,
 				OldMode:   old.Mode,
 				NewMode:   entry.Mode,
+				OldSize:   old.Size,
+				NewSize:   entry.Size,
+				SizeDelta: entry.Size - old.Size,
 				Changes:   changed,
 			})
 			continue
